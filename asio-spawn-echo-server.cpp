@@ -90,7 +90,7 @@ void session_t::run()
 			while (true)
 			{
 				buffer.resize(read_offset + 2);
-				auto read_size = self->socket->async_read_some(
+				auto read_size = socket->async_read_some(
 					asio::buffer(buffer.data() + read_offset, 2), yield[ec]);
 				if (ec)
 				{
@@ -115,7 +115,8 @@ void session_t::run()
 			std::size_t write_offset = 0;
 			while (true)
 			{
-				auto write_size = self->socket->async_write_some(asio::buffer(buffer.data() + write_offset, 2), yield[ec]);
+				auto write_size = socket->async_write_some(
+					asio::buffer(buffer.data() + write_offset, 2), yield[ec]);
 
 				if (ec)
 				{
