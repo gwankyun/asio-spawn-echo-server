@@ -11,6 +11,8 @@
 #include <queue>
 #include <functional>
 
+#include <cmath>
+
 #include <boost/asio.hpp>
 #include <boost/asio/spawn.hpp>
 
@@ -31,6 +33,8 @@ using acceptor_t = tcp_t::acceptor;
 using resolver_t = tcp_t::resolver;
 using error_code_t = boost::system::error_code;
 using yield_context_t = asio::yield_context;
+
+#define NOMINMAX
 
 class session_t : public enable_shared_from_this<session_t>
 {
@@ -75,6 +79,63 @@ session_t::session_t(io_context_t &io_context)
 	socket = make_shared<socket_t>(io_context);
 }
 
+template<typename Pred>
+error_code_t read_util(socket_t &socket, vector<char> &buffer, std::size_t &read_offset, yield_context_t &yield, Pred pred)
+{
+	error_code_t ec;
+	while (true)
+	{
+		buffer.resize(read_offset + 2);
+		auto read_size = socket.async_read_some(
+			asio::buffer(buffer.data() + read_offset, 2), yield[ec]);
+		if (ec)
+		{
+			LOG_ERROR("log", ec.message());
+			return ec;
+		}
+
+		LOG_DEBUG("log", "read_size:{0}", read_size);
+
+		read_offset += read_size;
+
+		if (pred())
+		{
+			return ec;
+		}
+	}
+}
+
+error_code_t write_n(socket_t &socket, const vector<char> &buffer, std::size_t read_offset, yield_context_t &yield)
+{
+	error_code_t ec;
+	std::size_t write_offset = 0;
+	while (true)
+	{
+		std::size_t size = std::min(read_offset - write_offset, std::size_t(2));
+		LOG_DEBUG("log", "size:{0}", size);
+		auto write_size = socket.async_write_some(
+			asio::buffer(buffer.data() + write_offset, size), yield[ec]);
+
+		if (ec)
+		{
+			return ec;
+		}
+
+		write_offset += write_size;
+
+		LOG_DEBUG("log", "write_size:{0}", write_size);
+
+		LOG_DEBUG("log", "write_offset:{0} read_offset:{1}",
+			write_offset,
+			read_offset);
+
+		if (write_offset == read_offset)
+		{
+			return ec;
+		}
+	}
+}
+
 void session_t::run()
 {
 	auto self(shared_from_this());
@@ -87,53 +148,29 @@ void session_t::run()
 			vector<char> buffer;
 
 			std::size_t read_offset = 0;
-			while (true)
+
+			ec = read_util(*socket, buffer, read_offset, yield,
+				[&buffer, &read_offset]()
 			{
-				buffer.resize(read_offset + 2);
-				auto read_size = socket->async_read_some(
-					asio::buffer(buffer.data() + read_offset, 2), yield[ec]);
-				if (ec)
-				{
-					LOG_ERROR("log", ec.message());
-					return;
-				}
+				return buffer[read_offset - 1] == '\0';
+			});
 
-				LOG_DEBUG("log", "read_size:{0}", read_size);
-
-				read_offset += read_size;
-
-				if (buffer[read_offset - 1] == '\0')
-				{
-					LOG_INFO("log", "address:{0} ip:{1} message:{2}",
-						address(),
-						port(),
-						buffer.data());
-					break;
-				}
+			if (ec)
+			{
+				LOG_ERROR("log", ec.message());
+				return;
 			}
 
-			std::size_t write_offset = 0;
-			while (true)
+			LOG_INFO("log", "address:{0} ip:{1} server message:{2}",
+				address(),
+				port(),
+				buffer.data());
+
+			ec = write_n(*socket, buffer, read_offset, yield);
+			if (ec)
 			{
-				auto write_size = socket->async_write_some(
-					asio::buffer(buffer.data() + write_offset, 2), yield[ec]);
-
-				if (ec)
-				{
-					LOG_ERROR("log", ec.message());
-					return;
-				}
-
-				LOG_DEBUG("log", "write_size:{0}", write_size);
-
-				write_offset += write_size;
-
-				LOG_DEBUG("log", "write_offset:{0}", write_offset);
-
-				if (write_offset == read_offset)
-				{
-					break;
-				}
+				LOG_ERROR("log", ec.message());
+				return;
 			}
 		}
 	});
@@ -142,6 +179,7 @@ void session_t::run()
 int main()
 {
 	auto logger = spdlog::stdout_color_mt("log");
+	spdlog::set_level(spdlog::level::level_enum::debug);
 	io_context_t io_context;
 	asio::spawn(io_context, 
 		[&](yield_context_t yield) 
