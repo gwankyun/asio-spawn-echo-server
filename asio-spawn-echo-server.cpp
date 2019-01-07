@@ -80,9 +80,10 @@ session_t::session_t(io_context_t &io_context)
 }
 
 template<typename Pred>
-error_code_t read_util(socket_t &socket, vector<char> &buffer, std::size_t &read_offset, yield_context_t &yield, Pred pred)
+std::size_t read_util(socket_t &socket, vector<char> &buffer, yield_context_t &yield, error_code_t &ec, Pred pred)
 {
-	error_code_t ec;
+	//error_code_t ec;
+	std::size_t read_offset = 0;
 	while (true)
 	{
 		buffer.resize(read_offset + 2);
@@ -91,23 +92,23 @@ error_code_t read_util(socket_t &socket, vector<char> &buffer, std::size_t &read
 		if (ec)
 		{
 			LOG_ERROR("log", ec.message());
-			return ec;
+			return read_offset;
 		}
 
 		LOG_DEBUG("log", "read_size:{0}", read_size);
 
 		read_offset += read_size;
 
-		if (pred())
+		if (pred(read_offset))
 		{
-			return ec;
+			return read_offset;
 		}
 	}
 }
 
-error_code_t write_n(socket_t &socket, const vector<char> &buffer, std::size_t read_offset, yield_context_t &yield)
+std::size_t write_n(socket_t &socket, const vector<char> &buffer, std::size_t read_offset, yield_context_t &yield, error_code_t &ec)
 {
-	error_code_t ec;
+	//error_code_t ec;
 	std::size_t write_offset = 0;
 	while (true)
 	{
@@ -118,7 +119,7 @@ error_code_t write_n(socket_t &socket, const vector<char> &buffer, std::size_t r
 
 		if (ec)
 		{
-			return ec;
+			return write_offset;
 		}
 
 		write_offset += write_size;
@@ -131,7 +132,7 @@ error_code_t write_n(socket_t &socket, const vector<char> &buffer, std::size_t r
 
 		if (write_offset == read_offset)
 		{
-			return ec;
+			return write_offset;
 		}
 	}
 }
@@ -147,12 +148,10 @@ void session_t::run()
 		{
 			vector<char> buffer;
 
-			std::size_t read_offset = 0;
-
-			ec = read_util(*socket, buffer, read_offset, yield,
-				[&buffer, &read_offset]()
+			auto read_offset = read_util(*socket, buffer, yield, ec,
+				[&buffer](const std::size_t size)
 			{
-				return buffer[read_offset - 1] == '\0';
+				return buffer[size - 1] == '\0';
 			});
 
 			if (ec)
@@ -166,7 +165,7 @@ void session_t::run()
 				port(),
 				buffer.data());
 
-			ec = write_n(*socket, buffer, read_offset, yield);
+			auto write_size = write_n(*socket, buffer, read_offset, yield, ec);
 			if (ec)
 			{
 				LOG_ERROR("log", ec.message());
