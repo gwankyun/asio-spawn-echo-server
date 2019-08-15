@@ -38,3 +38,5 @@
 *.vcxproj.user
 pch.h
 pch.cpp
+/bin
+/build
